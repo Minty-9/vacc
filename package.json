@@ -1,1 +1,9 @@
-
+{
+  "name": "vacc-learn",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VACC Learn — server-side functions for Paystack verification and admin setup",
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  }
+}
