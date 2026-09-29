@@ -1,0 +1,13 @@
+{
+  "name": "VACC Learn",
+  "short_name": "VACC Learn",
+  "description": "VACC Learning Platform — Learn. Practice. Grow.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#a86aa0",
+  "theme_color": "#a86aa0",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
