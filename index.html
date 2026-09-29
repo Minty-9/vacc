@@ -5,9 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#a86aa0">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="VACC Learn">
 <meta name="description" content="VACC Learning Platform — Learn. Practice. Grow.">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <title>VACC Learn — Learning Platform</title>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
@@ -486,6 +490,7 @@ a { color: inherit; }
       <div id="auth-error" class="error-msg" style="display:none"></div>
       <div class="field"><label>Email Address</label><input type="email" id="login-email" placeholder="you@example.com" autocomplete="email"></div>
       <div class="field"><label>Password</label><input type="password" id="login-pass" placeholder="••••••••" autocomplete="current-password"></div>
+      <div style="text-align:right;margin:-0.6rem 0 1.1rem"><a href="#" onclick="openForgotPasswordModal();return false;" style="font-size:0.78rem;color:var(--brand);font-weight:700">Forgot password?</a></div>
       <button class="btn-auth" onclick="doLogin()">Sign In →</button>
     </div>
     <p style="text-align:center;font-size:0.72rem;color:var(--muted);margin-top:1.2rem">New here? <a href="#" onclick="showRegister();return false;" style="color:var(--brand);font-weight:700">Create an account</a> · <a href="#" onclick="showLanding();return false;" style="color:var(--muted)">Back home</a></p>
@@ -713,7 +718,7 @@ function getLogoImg(){
 document.querySelectorAll('.brand-icon, .header-icon, .land-logo-icon, .admin-brand-icon').forEach(el => {
   el.innerHTML = '<img src="'+LOGO_DATA+'" alt="VACC" style="width:60%;height:60%;object-fit:contain">';
 });
-['icon','shortcut icon','apple-touch-icon'].forEach(rel => {
+['icon','shortcut icon'].forEach(rel => {
   const link = document.createElement('link');
   link.rel = rel; link.href = LOGO_DATA;
   document.head.appendChild(link);
@@ -870,6 +875,27 @@ function friendlyAuthError(e){
   return 'Something went wrong. Please try again.';
 }
 function logout(){ auth.signOut(); }
+
+function openForgotPasswordModal(){
+  const prefill = document.getElementById('login-email').value.trim();
+  const body = '<p style="font-size:0.85rem;color:var(--muted);margin-bottom:1rem;line-height:1.5">Enter the email you signed up with — we\'ll send a link to reset your password.</p>'+
+    '<div class="form-field"><label>Email Address</label><input type="email" id="forgot-email" placeholder="you@example.com" value="'+esc(prefill)+'"></div>'+
+    '<button class="btn btn-primary btn-full" onclick="sendPasswordReset()">Send Reset Link</button>';
+  openModal('Reset Password', body);
+}
+async function sendPasswordReset(){
+  const email = document.getElementById('forgot-email').value.trim();
+  if (!email){ showToast('Please enter your email.'); return; }
+  try {
+    await auth.sendPasswordResetEmail(email);
+    closeModal();
+    showToast('Reset link sent — check your inbox.');
+  } catch(e){
+    // Deliberately vague on "user not found" so this can't be used to check which emails have accounts
+    showToast('If an account exists for that email, a reset link has been sent.');
+    closeModal();
+  }
+}
 
 auth.onAuthStateChanged(async (fbUser) => {
   const loading = document.getElementById('loading');
