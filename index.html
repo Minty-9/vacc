@@ -697,6 +697,10 @@ const PAYSTACK_PUBLIC_KEY = 'pk_live_4b3f74ff6047228d59a17644321927fe63ce34fe';
 let currentUser = null;
 let courseFilter = 'all';
 let ctx = { courseId: null, lessonId: null, certCourseId: null };
+// Deep-link support: a link like https://yoursite.app/?course=COURSEID opens
+// straight into that course after login/signup — for pointing ads or posts
+// directly at a paid course instead of the generic homepage.
+const deepLinkCourseId = new URLSearchParams(window.location.search).get('course');
 const AVATAR_MAX_BYTES = 500*1024;   // Firestore documents cap at ~1MB, so files stay small until real file storage is added
 const FILE_MAX_BYTES = 700*1024;
 
@@ -944,7 +948,14 @@ function showApp(){
     document.getElementById('student-nav').style.display='flex';
     document.getElementById('view-admin').classList.remove('active');
     updateHeaderChip();
-    nav('home');
+    if (deepLinkCourseId){
+      getCourse(deepLinkCourseId).then(c => {
+        history.replaceState({}, '', window.location.pathname);
+        if (c) openCourse(deepLinkCourseId); else nav('home');
+      });
+    } else {
+      nav('home');
+    }
   }
 }
 function updateHeaderChip(){
@@ -1117,8 +1128,8 @@ function payForCourse(courseId, price){
         body: JSON.stringify({ reference: response.reference, uid: currentUser.uid, courseId: courseId })
       }).then(r=>r.json()).then(res=>{
         if (res && res.success){ showToast('Enrolled! 🎉'); openCourse(courseId); }
-        else { showToast('Payment received but not yet confirmed — check back in a moment.'); }
-      }).catch(()=>{ showToast('Could not confirm payment automatically. Contact support if you were charged.'); });
+        else { console.error('verify-payment response:', res); showToast('Payment not confirmed: ' + (res && res.error ? res.error : 'unknown reason') + '. Reference: ' + response.reference + '. Contact support with this reference.'); }
+      }).catch((err)=>{ console.error('verify-payment fetch error:', err); showToast('Could not reach the server to confirm payment. Reference: ' + response.reference + '. Contact support if you were charged.'); });
     },
     onClose: function(){ showToast('Payment cancelled.'); }
   });
@@ -1195,19 +1206,24 @@ function setSubType(t){
 async function submitAssignment(courseId, lessonId){
   const type = window._subType || 'text';
   const finish = async (content, fileName, fileData) => {
-    await col('submissions').doc(currentUser.uid+'_'+lessonId).set({
-      user_id: currentUser.uid, course_id: courseId, lesson_id: lessonId, type, content: content||'', file_name: fileName||'', file_data: fileData||'',
-      submitted_at: FieldValue.serverTimestamp(), status:'pending', feedback:''
-    });
-    const enRef = col('enrollments').doc(currentUser.uid+'_'+courseId);
-    const enSnap = await enRef.get();
-    if (enSnap.exists){
-      const completed = enSnap.data().completed||[];
-      if (!completed.includes(lessonId)){ completed.push(lessonId); await enRef.update({ completed }); }
+    try {
+      await col('submissions').doc(currentUser.uid+'_'+lessonId).set({
+        user_id: currentUser.uid, course_id: courseId, lesson_id: lessonId, type, content: content||'', file_name: fileName||'', file_data: fileData||'',
+        submitted_at: FieldValue.serverTimestamp(), status:'pending', feedback:''
+      });
+      const enRef = col('enrollments').doc(currentUser.uid+'_'+courseId);
+      const enSnap = await enRef.get();
+      if (enSnap.exists){
+        const completed = enSnap.data().completed||[];
+        if (!completed.includes(lessonId)){ completed.push(lessonId); await enRef.update({ completed }); }
+      }
+      closeModal();
+      showToast('Assignment submitted! 📤');
+      openLesson(courseId, lessonId);
+    } catch(err){
+      console.error('submitAssignment error:', err);
+      showToast('Could not submit: ' + (err && err.message ? err.message : 'unknown error') + '. Please try again or contact support.');
     }
-    closeModal();
-    showToast('Assignment submitted! 📤');
-    openLesson(courseId, lessonId);
   };
   if (type==='text'){
     const val = document.getElementById('sub-text').value.trim();
@@ -1444,7 +1460,7 @@ async function renderAdminCourses(){
     return '<div class="admin-course-item"><div class="admin-course-head">'+
       '<div class="admin-course-icon">'+c.icon+'</div>'+
       '<div class="admin-course-info"><div class="admin-course-title">'+esc(c.title)+'</div><div class="admin-course-sub">'+(c.modules||[]).length+' modules · '+courseLessonCount(c)+' lessons · '+(c.is_paid?money(c.price):'Free')+'</div></div>'+
-      '<div class="ul-actions"><button class="icon-btn" onclick="openEditCourseModal(&quot;'+c.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button><button class="icon-btn danger" onclick="deleteCourse(&quot;'+c.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg></button></div>'+
+      '<div class="ul-actions"><button class="icon-btn" title="Copy ad link" onclick="copyCourseLink(&quot;'+c.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1"/><path d="M14 11a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1"/></svg></button><button class="icon-btn" onclick="openEditCourseModal(&quot;'+c.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button><button class="icon-btn danger" onclick="deleteCourse(&quot;'+c.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg></button></div>'+
       '</div>'+
       (c.modules||[]).map(m=>'<div class="admin-module"><div class="admin-module-head"><h5>'+esc(m.title)+'</h5><div class="ul-actions"><button class="icon-btn danger" onclick="deleteModule(&quot;'+c.id+'&quot;,&quot;'+m.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg></button></div></div>'+
         m.lessons.map(l=>'<div class="admin-lesson-row"><span class="pill '+l.type+'">'+(l.type==='video'?'▶':'📄')+'</span><span class="alr-title">'+esc(l.title)+'</span>'+(l.assignment?'<span class="pill pending">Task</span>':'')+'<button class="icon-btn" onclick="openEditLessonModal(&quot;'+c.id+'&quot;,&quot;'+m.id+'&quot;,&quot;'+l.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg></button><button class="icon-btn danger" onclick="deleteLesson(&quot;'+c.id+'&quot;,&quot;'+m.id+'&quot;,&quot;'+l.id+'&quot;)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>').join('')+
@@ -1515,6 +1531,13 @@ async function saveEditCourse(id){
   closeModal();
   showToast('Course updated!');
   renderAdminCourses();
+}
+function copyCourseLink(id){
+  const url = window.location.origin + '/?course=' + id;
+  navigator.clipboard.writeText(url).then(
+    () => showToast('Link copied — paste it as your ad\'s destination URL.'),
+    () => showToast(url)
+  );
 }
 async function deleteCourse(id){
   if (!confirm('Delete this course and all its modules and lessons?')) return;
