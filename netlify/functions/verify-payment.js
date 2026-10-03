@@ -18,7 +18,7 @@ async function verifyWithRetry(reference, attempts = 4, delayMs = 1500) {
       { headers: { Authorization: 'Bearer ' + process.env.PAYSTACK_SECRET_KEY } }
     );
     const data = await res.json();
-    lastData = { ok: res.ok, data };
+    lastData = { ok: res.ok, status: res.status, data };
     if (res.ok && data.status && data.data && data.data.status === 'success') return lastData;
     if (i < attempts - 1) await sleep(delayMs);
   }
@@ -43,9 +43,21 @@ exports.handler = async (event) => {
   }
 
   try {
-    const { ok, data: paystackData } = await verifyWithRetry(reference);
+    const { ok, status: lastHttpStatus, data: paystackData } = await verifyWithRetry(reference);
 
     if (!ok || !paystackData.status || !paystackData.data || paystackData.data.status !== 'success') {
+      // Log everything Paystack actually said, so the next failure is diagnosable
+      // from the function log instead of another guess.
+      console.error('verify-payment: Paystack did not confirm success.', {
+        reference,
+        httpOk: ok,
+        httpStatusCode: lastHttpStatus,
+        paystackTopLevelStatus: paystackData && paystackData.status,
+        paystackMessage: paystackData && paystackData.message,
+        transactionStatus: paystackData && paystackData.data && paystackData.data.status,
+        gatewayResponse: paystackData && paystackData.data && paystackData.data.gateway_response,
+        fullResponse: paystackData
+      });
       return { statusCode: 200, body: JSON.stringify({ success: false, error: 'Payment was not confirmed as successful after retrying. If this was a bank transfer, it may still complete shortly — the webhook will unlock it automatically when it does.' }) };
     }
 
