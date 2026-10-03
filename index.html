@@ -1178,6 +1178,20 @@ async function openLesson(courseId, lessonId){
   document.getElementById('view-lesson').classList.add('active');
 }
 function backToCourseDetail(){ openCourse(ctx.courseId); }
+// After finishing a lesson, move straight to the next one instead of leaving
+// the student stuck looking at the same completed page. If this was the last
+// lesson, go back to the course overview (which shows the certificate banner
+// if the course is now fully complete).
+async function advanceAfterCompletion(courseId, lessonId){
+  const c = await getCourse(courseId);
+  if (!c){ nav('courses'); return; }
+  const flat = flatLessons(c);
+  const idx = flat.findIndex(l => l.id === lessonId);
+  const nextLesson = idx > -1 ? flat[idx+1] : null;
+  if (nextLesson) openLesson(courseId, nextLesson.id);
+  else openCourse(courseId);
+}
+
 async function toggleLessonComplete(courseId, lessonId){
   const ref = col('enrollments').doc(currentUser.uid+'_'+courseId);
   const snap = await ref.get();
@@ -1185,9 +1199,11 @@ async function toggleLessonComplete(courseId, lessonId){
   const en = snap.data();
   const completed = en.completed||[];
   const idx = completed.indexOf(lessonId);
+  const wasIncomplete = idx === -1;
   if (idx>-1) completed.splice(idx,1); else completed.push(lessonId);
   await ref.update({ completed });
-  openLesson(courseId, lessonId);
+  if (wasIncomplete) advanceAfterCompletion(courseId, lessonId);
+  else openLesson(courseId, lessonId);
 }
 
 function openSubmitModal(courseId, lessonId){
@@ -1221,7 +1237,7 @@ async function submitAssignment(courseId, lessonId){
       }
       closeModal();
       showToast('Assignment submitted! 📤');
-      openLesson(courseId, lessonId);
+      advanceAfterCompletion(courseId, lessonId);
     } catch(err){
       console.error('submitAssignment error:', err);
       showToast('Could not submit: ' + (err && err.message ? err.message : 'unknown error') + '. Please try again or contact support.');
