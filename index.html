@@ -694,7 +694,7 @@ const dbFS = firebase.firestore();
 const FieldValue = firebase.firestore.FieldValue;
 
 // TODO: swap to your live public key right before launch (pk_live_...). Never put the secret key here.
-const PAYSTACK_PUBLIC_KEY = 'pk_live_4b3f74ff6047228d59a17644321927fe63ce34fe';
+const PAYSTACK_PUBLIC_KEY = 'pk_test_34405783bfc7bd1d16ea616e024c4196cd563345';
 
 let currentUser = null;
 let courseFilter = 'all';
@@ -702,7 +702,10 @@ let ctx = { courseId: null, lessonId: null, certCourseId: null };
 // Deep-link support: a link like https://yoursite.app/?course=COURSEID opens
 // straight into that course after login/signup — for pointing ads or posts
 // directly at a paid course instead of the generic homepage.
-const deepLinkCourseId = new URLSearchParams(window.location.search).get('course');
+const _urlParams = new URLSearchParams(window.location.search);
+const deepLinkCourseId = _urlParams.get('course');
+const claimRef = _urlParams.get('claim');
+const prefillEmail = _urlParams.get('prefillEmail');
 const AVATAR_MAX_BYTES = 500*1024;   // Firestore documents cap at ~1MB, so files stay small until real file storage is added
 const FILE_MAX_BYTES = 700*1024;
 
@@ -924,7 +927,15 @@ auth.onAuthStateChanged(async (fbUser) => {
       }
     } else {
       currentUser = null;
-      showLanding();
+      if (claimRef || prefillEmail){
+        // Came here from a checkout page that already took payment or wants
+        // to enroll in a free course — skip the marketing landing page and
+        // go straight to account creation, pre-filled with their email.
+        showRegister();
+        if (prefillEmail) document.getElementById('reg-email').value = prefillEmail;
+      } else {
+        showLanding();
+      }
     }
   } catch(e){
     console.error(e);
@@ -950,7 +961,26 @@ function showApp(){
     document.getElementById('student-nav').style.display='flex';
     document.getElementById('view-admin').classList.remove('active');
     updateHeaderChip();
-    if (deepLinkCourseId){
+    if (claimRef){
+      showToast('Finishing up your enrollment...');
+      fetch('/.netlify/functions/claim-payment', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ reference: claimRef, uid: currentUser.uid })
+      }).then(r => r.json()).then(res => {
+        history.replaceState({}, '', window.location.pathname);
+        if (res && res.success){
+          showToast('Enrolled! 🎉');
+          openCourse(res.courseId || deepLinkCourseId);
+        } else {
+          showToast((res && res.error) ? res.error : 'Could not confirm your payment automatically — contact support with your payment reference.');
+          nav('home');
+        }
+      }).catch(() => {
+        history.replaceState({}, '', window.location.pathname);
+        showToast('Could not confirm your payment automatically — contact support with your payment reference.');
+        nav('home');
+      });
+    } else if (deepLinkCourseId){
       getCourse(deepLinkCourseId).then(c => {
         history.replaceState({}, '', window.location.pathname);
         if (c) openCourse(deepLinkCourseId); else nav('home');
