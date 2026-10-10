@@ -40,7 +40,7 @@ h1{font-family:'Playfair Display',serif;font-size:1.3rem;font-weight:700;margin-
 </div>
 <script>
 // TODO: swap to your live public key right before launch (pk_live_...).
-const PAYSTACK_PUBLIC_KEY = 'pk_live_4b3f74ff6047228d59a17644321927fe63ce34fe';
+const PAYSTACK_PUBLIC_KEY = 'pk_test_34405783bfc7bd1d16ea616e024c4196cd563345';
 // Where the main app lives — update this if your domain setup changes.
 const APP_URL = 'https://app.veraalexcoaching.com/';
 
@@ -111,16 +111,29 @@ function startCheckout(course){
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ reference: response.reference, email: email, courseId: course.id })
       }).then(r => r.json()).then(res => {
+        const claimUrl = APP_URL + '?course=' + encodeURIComponent(course.id) + '&claim=' + encodeURIComponent(response.reference) + '&prefillEmail=' + encodeURIComponent(email);
+        const signupButton = '<button class="btn" onclick="window.location.href=\'' + claimUrl + '\'">Create My Account →</button>';
         if (res && res.success){
           content.innerHTML =
             '<div class="success"><h2>Payment confirmed! 🎉</h2>' +
             '<p>Create your free VACC Learn account with <strong>' + esc(email) + '</strong> to get instant access to <strong>' + esc(course.title) + '</strong>.</p>' +
-            '<button class="btn" onclick="window.location.href=\'' + APP_URL + '?course=' + encodeURIComponent(course.id) + '&claim=' + encodeURIComponent(response.reference) + '&prefillEmail=' + encodeURIComponent(email) + '\'">Create My Account →</button></div>';
+            signupButton + '</div>';
         } else {
-          content.innerHTML = '<div class="state">Payment received, reference <strong>' + esc(response.reference) + '</strong>, but not yet confirmed. Please contact support with this reference — do not pay again.</div>';
+          // Not confirmed yet (common for bank transfers, which can take a few minutes).
+          // The webhook will record the payment server-side as soon as Paystack confirms it,
+          // so sending them on to sign up now is safe — the account just links up to the
+          // payment automatically once it lands, rather than leaving them stuck here.
+          content.innerHTML =
+            '<div class="success"><h2>Payment received</h2>' +
+            '<p>Reference <strong>' + esc(response.reference) + '</strong>. Bank transfers can take a few minutes to confirm. Go ahead and create your account with <strong>' + esc(email) + '</strong> now — we\'ll finish linking your payment automatically. If it hasn\'t unlocked after a few minutes, contact support with this reference (do not pay again).</p>' +
+            signupButton + '</div>';
         }
       }).catch(() => {
-        content.innerHTML = '<div class="state">Payment received, reference <strong>' + esc(response.reference) + '</strong>, but we could not confirm it automatically. Please contact support with this reference — do not pay again.</div>';
+        const claimUrl = APP_URL + '?course=' + encodeURIComponent(course.id) + '&claim=' + encodeURIComponent(response.reference) + '&prefillEmail=' + encodeURIComponent(email);
+        content.innerHTML =
+          '<div class="success"><h2>Payment received</h2>' +
+          '<p>Reference <strong>' + esc(response.reference) + '</strong>. We couldn\'t confirm it automatically just now, but go ahead and create your account with <strong>' + esc(email) + '</strong> — we\'ll finish linking your payment once it confirms. If it hasn\'t unlocked after a few minutes, contact support with this reference (do not pay again).</p>' +
+          '<button class="btn" onclick="window.location.href=\'' + claimUrl + '\'">Create My Account →</button></div>';
       });
     },
     onClose: function(){ btn.disabled = false; btn.textContent = 'Pay ' + money(course.price) + ' to Enroll'; }
