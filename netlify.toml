@@ -4,6 +4,11 @@
 
 [build.environment]
   NODE_VERSION = "20"
+  # VAPID_PUBLIC_KEY is meant to be public — it's the Web Push "public" key and
+  # has to ship inside index.html/sw.js for push subscriptions to work at all.
+  # Without this, Netlify's secret scanner flags it as a leaked secret and fails
+  # every build, because it matches the env var of the same name.
+  SECRETS_SCAN_OMIT_KEYS = "VAPID_PUBLIC_KEY"
 
 [functions]
   node_bundler = "esbuild"
