@@ -10,6 +10,11 @@
 <meta name="apple-mobile-web-app-title" content="VACC Learn">
 <meta name="description" content="VACC Learning Platform — Learn. Practice. Grow.">
 <link rel="manifest" href="/manifest.json">
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(()=>{}); });
+}
+</script>
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
 <title>VACC Learn — Learning Platform</title>
@@ -57,7 +62,7 @@ body { font-family: 'Nunito', sans-serif; background: var(--bg); color: var(--te
 button, input, textarea, select { font-family: inherit; }
 a { color: inherit; }
 
-#app { min-height: 100vh; display: none; flex-direction: column; }
+#app { min-height: 100vh; display: none; flex-direction: column; background: var(--bg); }
 .view { display: none; flex-direction: column; min-height: calc(100vh - var(--nav-h) - var(--safe-bottom)); padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 1rem); animation: fadeIn 0.25s ease; }
 .view.active { display: flex; }
 .view.no-nav { padding-bottom: 1rem; min-height: 100vh; }
@@ -395,6 +400,22 @@ a { color: inherit; }
   .features-grid { grid-template-columns: 1fr 1fr 1fr; }
   .land-hero h1 { font-size:2.6rem; }
 }
+
+/* ---- Laptop / desktop layout ----
+   The app is built mobile-first (fixed bottom tab bar, full-bleed single-column
+   content). Below this width that's fine; above it, cap the app to a centered
+   column instead of stretching every card and video edge-to-edge, and turn the
+   course list into a grid instead of a long stack. */
+@media (min-width: 900px) {
+  #app { max-width: 1120px; margin: 0 auto; min-height: 100vh; box-shadow: 0 0 0 1px var(--border); }
+  .bottom-nav { left: 50%; right: auto; transform: translateX(-50%); width: 100%; max-width: 1120px; }
+  #courses-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+  #courses-list .course-card { margin-bottom: 0; }
+  .video-wrap { max-width: 760px; margin-left: auto; margin-right: auto; }
+}
+@media (min-width: 1160px) {
+  body { background: var(--border); }
+}
 </style>
 </head>
 <body>
@@ -694,7 +715,7 @@ const dbFS = firebase.firestore();
 const FieldValue = firebase.firestore.FieldValue;
 
 // TODO: swap to your live public key right before launch (pk_live_...). Never put the secret key here.
-const PAYSTACK_PUBLIC_KEY = 'pk_live_4b3f74ff6047228d59a17644321927fe63ce34fe';
+const PAYSTACK_PUBLIC_KEY = 'pk_test_34405783bfc7bd1d16ea616e024c4196cd563345';
 
 let currentUser = null;
 let courseFilter = 'all';
@@ -706,6 +727,7 @@ const _urlParams = new URLSearchParams(window.location.search);
 const deepLinkCourseId = _urlParams.get('course');
 const claimRef = _urlParams.get('claim');
 const prefillEmail = _urlParams.get('prefillEmail');
+const deepLinkNav = _urlParams.get('nav');
 const AVATAR_MAX_BYTES = 500*1024;   // Firestore documents cap at ~1MB, so files stay small until real file storage is added
 const FILE_MAX_BYTES = 700*1024;
 
@@ -765,6 +787,108 @@ function openModal(title, bodyHtml){
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
+
+// ───────────────────────── Add to Home Screen prompt ─────────────────────────
+// Shown once per device, right after a student lands in the app, so they can get
+// the one-tap app icon without going looking for the browser's install option.
+let _deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+});
+window.addEventListener('appinstalled', () => {
+  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
+});
+function _isStandaloneApp(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function dismissInstallPrompt(){
+  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
+  closeModal();
+}
+function triggerInstallPrompt(){
+  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
+  closeModal();
+  if (_deferredInstallPrompt){
+    _deferredInstallPrompt.prompt();
+    _deferredInstallPrompt = null;
+  }
+}
+function maybeShowInstallPrompt(){
+  try {
+    if (_isStandaloneApp()) return; // already installed/running as an app
+    if (localStorage.getItem('vacc_install_prompt_seen')) return; // already asked
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+    if (isIOS){
+      openModal('Add VACC Learn to your Home Screen', '' +
+        '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Get one-tap access like an app: tap the <strong>Share</strong> icon in Safari, then choose <strong>“Add to Home Screen.”</strong></p>' +
+        '<button class="btn" onclick="dismissInstallPrompt()">Got it</button>');
+    } else if (_deferredInstallPrompt){
+      openModal('Add VACC Learn to your Home Screen', '' +
+        '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Install VACC Learn for one-tap access from your home screen, just like an app.</p>' +
+        '<button class="btn" onclick="triggerInstallPrompt()" style="margin-bottom:0.6rem;">Add to Home Screen</button>' +
+        '<button class="btn" style="background:transparent;color:var(--muted);" onclick="dismissInstallPrompt()">Not now</button>');
+    }
+    // Otherwise (desktop browser with no install event, or already dismissed by the
+    // browser) there's nothing reliable to prompt — stay silent rather than nag.
+  } catch(e){}
+}
+
+// ───────────────────────── Push notifications (Web Push, not Firebase) ─────────────────────────
+// Real OS/lock-screen notifications for announcements, sent through a Netlify
+// function using the Web Push standard (VAPID) — independent of Firebase
+// Cloud Messaging. Firestore is still where the subscription itself lives
+// (via save-push-subscription.js), since this app already has a database.
+const VAPID_PUBLIC_KEY = 'BAzS-HWcHlGn-JxhxrE-RTLyUw_PGcwsDMLjpj2irkQ6nmPVkDLAAd2pfeE55QrkysdRrBL7tDJtRvOYKcz325A';
+
+function _urlBase64ToUint8Array(base64String){
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+async function enablePushNotifications(){
+  try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
+  closeModal();
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub){
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: _urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+    await fetch('/.netlify/functions/save-push-subscription', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ uid: currentUser.uid, subscription: sub.toJSON ? sub.toJSON() : sub })
+    });
+  } catch(e){ console.error('enablePushNotifications error:', e); }
+}
+function dismissPushPrompt(){
+  try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
+  closeModal();
+}
+function maybeAskPushPermission(){
+  try {
+    if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
+    if (localStorage.getItem('vacc_push_prompt_seen')) return;
+    if (Notification.permission === 'granted' || Notification.permission === 'denied') {
+      try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
+      return;
+    }
+    openModal('Get notified about updates', '' +
+      '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Turn on notifications so you don\'t miss new announcements from VACC Learn — even when the app isn\'t open.</p>' +
+      '<button class="btn" onclick="enablePushNotifications()" style="margin-bottom:0.6rem;">Enable Notifications</button>' +
+      '<button class="btn" style="background:transparent;color:var(--muted);" onclick="dismissPushPrompt()">Not now</button>');
+  } catch(e){}
+}
 
 function courseLessonCount(course){ return (course.modules||[]).reduce((s,m)=>s+m.lessons.length,0); }
 function flatLessons(course){ const out=[]; (course.modules||[]).forEach(m=>m.lessons.forEach(l=>out.push(l))); return out; }
@@ -961,30 +1085,50 @@ function showApp(){
     document.getElementById('student-nav').style.display='flex';
     document.getElementById('view-admin').classList.remove('active');
     updateHeaderChip();
+    setTimeout(maybeShowInstallPrompt, 1400);
+    setTimeout(maybeAskPushPermission, 5000);
     if (claimRef){
+      // Bank-transfer payments can take a few minutes for Paystack's webhook to confirm,
+      // so a single immediate claim attempt often lands before the pending_payments
+      // record even exists yet. Retry a few times with backoff before giving up, rather
+      // than sending the student away on the first miss.
       showToast('Finishing up your enrollment...');
-      fetch('/.netlify/functions/claim-payment', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ reference: claimRef, uid: currentUser.uid })
-      }).then(r => r.json()).then(res => {
-        history.replaceState({}, '', window.location.pathname);
-        if (res && res.success){
-          showToast('Enrolled! 🎉');
-          openCourse(res.courseId || deepLinkCourseId);
-        } else {
-          showToast((res && res.error) ? res.error : 'Could not confirm your payment automatically — contact support with your payment reference.');
-          nav('home');
-        }
-      }).catch(() => {
-        history.replaceState({}, '', window.location.pathname);
-        showToast('Could not confirm your payment automatically — contact support with your payment reference.');
-        nav('home');
-      });
+      const attemptClaim = (attemptsLeft, delayMs) => {
+        fetch('/.netlify/functions/claim-payment', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ reference: claimRef, uid: currentUser.uid })
+        }).then(r => r.json()).then(res => {
+          if (res && res.success){
+            history.replaceState({}, '', window.location.pathname);
+            showToast('Enrolled! 🎉');
+            openCourse(res.courseId || deepLinkCourseId);
+          } else if (attemptsLeft > 0 && (!res || !res.error || /no pending payment/i.test(res.error))){
+            // Not found yet (webhook hasn't landed it) — wait and try again.
+            setTimeout(() => attemptClaim(attemptsLeft - 1, Math.min(delayMs * 2, 15000)), delayMs);
+          } else {
+            history.replaceState({}, '', window.location.pathname);
+            showToast((res && res.error) ? res.error : 'Could not confirm your payment automatically — contact support with your payment reference.');
+            nav('home');
+          }
+        }).catch(() => {
+          if (attemptsLeft > 0){
+            setTimeout(() => attemptClaim(attemptsLeft - 1, Math.min(delayMs * 2, 15000)), delayMs);
+          } else {
+            history.replaceState({}, '', window.location.pathname);
+            showToast('Could not confirm your payment automatically — contact support with your payment reference.');
+            nav('home');
+          }
+        });
+      };
+      attemptClaim(5, 3000);
     } else if (deepLinkCourseId){
       getCourse(deepLinkCourseId).then(c => {
         history.replaceState({}, '', window.location.pathname);
         if (c) openCourse(deepLinkCourseId); else nav('home');
       });
+    } else if (deepLinkNav){
+      history.replaceState({}, '', window.location.pathname);
+      nav(deepLinkNav);
     } else {
       nav('home');
     }
@@ -1731,6 +1875,16 @@ async function postAnnouncement(){
   await col('announcements').add({ title, content, created_at: FieldValue.serverTimestamp() });
   showToast('Announcement published! 📣');
   renderAdminAnnouncements();
+  // Best-effort push to every subscribed student — an announcement is still
+  // published even if sending notifications fails for some reason.
+  try {
+    const idToken = await auth.currentUser.getIdToken();
+    await fetch('/.netlify/functions/send-push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+      body: JSON.stringify({ title: title, body: content, url: '/?nav=announcements' })
+    });
+  } catch (e) { console.error('send-push error:', e); }
 }
 async function deleteAnnouncement(id){
   if (!confirm('Delete this announcement?')) return;
