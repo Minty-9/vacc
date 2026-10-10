@@ -36,15 +36,32 @@ exports.handler = async (event) => {
     const meta = data.metadata || {};
     const uid = meta.uid;
     const courseId = meta.courseId;
-    if (uid && courseId) {
-      try {
-        const db = admin.firestore();
+    const guestEmail = meta.guestEmail;
+
+    try {
+      const db = admin.firestore();
+      if (uid && courseId) {
+        // Logged-in checkout: unlock the enrollment directly.
         await unlockEnrollment(db, uid, courseId, (data.amount || 0) / 100, data.reference);
-      } catch (err) {
-        // Log for manual follow-up, but still acknowledge receipt below so Paystack
-        // doesn't retry indefinitely on an error that's on our end, not theirs.
-        console.error('paystack-webhook unlock error:', err);
+      } else if (guestEmail && courseId) {
+        // Guest checkout (e.g. a bank transfer that didn't confirm in time for
+        // verify-guest-payment's short retry window). Record the pending payment
+        // the same way verify-guest-payment.js does, so claim-payment.js can pick
+        // it up whenever the student finishes signing up — merge, never overwrite,
+        // in case verify-guest-payment already wrote it first.
+        await db.collection('pending_payments').doc(data.reference).set({
+          email: String(guestEmail).toLowerCase().trim(),
+          course_id: courseId,
+          amount: (data.amount || 0) / 100,
+          payment_ref: data.reference,
+          claimed: false,
+          created_at: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
       }
+    } catch (err) {
+      // Log for manual follow-up, but still acknowledge receipt below so Paystack
+      // doesn't retry indefinitely on an error that's on our end, not theirs.
+      console.error('paystack-webhook unlock error:', err);
     }
   }
 
