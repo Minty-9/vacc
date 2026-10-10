@@ -409,13 +409,29 @@ a { color: inherit; }
 @media (min-width: 900px) {
   #app { max-width: 1120px; margin: 0 auto; min-height: 100vh; box-shadow: 0 0 0 1px var(--border); }
   .bottom-nav { left: 50%; right: auto; transform: translateX(-50%); width: 100%; max-width: 1120px; }
-  #courses-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1rem; }
+  #courses-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.75rem; padding: 0 0.5rem; }
   #courses-list .course-card { margin-bottom: 0; }
   .video-wrap { max-width: 760px; margin-left: auto; margin-right: auto; }
 }
 @media (min-width: 1160px) {
   body { background: var(--border); }
 }
+
+/* ---- Add to Home Screen banner ---- */
+.install-banner { position: fixed; left: 1rem; right: 1rem; bottom: calc(var(--nav-h) + var(--safe-bottom) + 0.8rem); max-width: 420px; margin: 0 auto; background: linear-gradient(135deg, var(--brand-darker), var(--brand)); color: #fff; border-radius: 18px; padding: 1.1rem 1.2rem 1rem; box-shadow: 0 16px 40px rgba(26,26,46,0.35); z-index: 900; display: none; }
+.install-banner.show { display: block; animation: slideUp 0.3s cubic-bezier(0.16,1,0.3,1); }
+.install-banner-close { position: absolute; top: 0.7rem; right: 0.7rem; background: rgba(255,255,255,0.15); border: none; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; color: #fff; cursor: pointer; }
+.install-banner-close svg { width: 14px; height: 14px; }
+.install-banner-row { display: flex; gap: 0.8rem; align-items: flex-start; padding-right: 1.6rem; }
+.install-banner-icon { flex-shrink: 0; width: 42px; height: 42px; border-radius: 11px; background: rgba(255,255,255,0.18); display: flex; align-items: center; justify-content: center; }
+.install-banner-icon svg { width: 22px; height: 22px; color: #fff; }
+.install-banner-title { font-weight: 800; font-size: 0.95rem; margin-bottom: 0.25rem; }
+.install-banner-sub { font-size: 0.8rem; color: rgba(255,255,255,0.85); line-height: 1.45; }
+.install-banner-actions { display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 0.9rem; }
+.install-banner-btn { border: none; border-radius: 9px; padding: 0.55rem 1.1rem; font-size: 0.84rem; font-weight: 700; cursor: pointer; }
+.install-banner-btn.ghost { background: transparent; color: rgba(255,255,255,0.9); }
+.install-banner-btn.solid { background: #fff; color: var(--brand-darker); }
+@media (min-width: 560px) { .install-banner { left: auto; right: 1.5rem; bottom: 1.5rem; } }
 </style>
 </head>
 <body>
@@ -698,6 +714,24 @@ a { color: inherit; }
   </div>
 </div>
 
+<!-- Add to Home Screen banner (its own floating card, independent of the generic
+     modal above, so it never competes with the push-permission prompt for the
+     same dialog) -->
+<div class="install-banner" id="install-banner">
+  <button class="install-banner-close" onclick="dismissInstallPrompt()" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  <div class="install-banner-row">
+    <div class="install-banner-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2" width="10" height="20" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg></div>
+    <div class="install-banner-text">
+      <div class="install-banner-title" id="install-banner-title">Install VACC Learn App</div>
+      <div class="install-banner-sub" id="install-banner-sub">Add VACC Learn to your home screen for a better experience.</div>
+    </div>
+  </div>
+  <div class="install-banner-actions" id="install-banner-actions">
+    <button class="install-banner-btn ghost" onclick="dismissInstallPrompt()">Not now</button>
+    <button class="install-banner-btn solid" id="install-banner-cta" onclick="triggerInstallPrompt()">Install</button>
+  </div>
+</div>
+
 <script>
 // ───────────────────────── Firebase init ─────────────────────────
 const firebaseConfig = {
@@ -804,11 +838,11 @@ function _isStandaloneApp(){
 }
 function dismissInstallPrompt(){
   try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
-  closeModal();
+  document.getElementById('install-banner').classList.remove('show');
 }
 function triggerInstallPrompt(){
   try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
-  closeModal();
+  document.getElementById('install-banner').classList.remove('show');
   if (_deferredInstallPrompt){
     _deferredInstallPrompt.prompt();
     _deferredInstallPrompt = null;
@@ -819,15 +853,14 @@ function maybeShowInstallPrompt(){
     if (_isStandaloneApp()) return; // already installed/running as an app
     if (localStorage.getItem('vacc_install_prompt_seen')) return; // already asked
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+    const banner = document.getElementById('install-banner');
+    const actions = document.getElementById('install-banner-actions');
     if (isIOS){
-      openModal('Add VACC Learn to your Home Screen', '' +
-        '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Get one-tap access like an app: tap the <strong>Share</strong> icon in Safari, then choose <strong>“Add to Home Screen.”</strong></p>' +
-        '<button class="btn" onclick="dismissInstallPrompt()">Got it</button>');
+      document.getElementById('install-banner-sub').innerHTML = 'Tap the <strong>Share</strong> icon in Safari, then choose <strong>“Add to Home Screen”</strong> for a better experience.';
+      actions.innerHTML = '<button class="install-banner-btn solid" onclick="dismissInstallPrompt()">Got it</button>';
+      banner.classList.add('show');
     } else if (_deferredInstallPrompt){
-      openModal('Add VACC Learn to your Home Screen', '' +
-        '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Install VACC Learn for one-tap access from your home screen, just like an app.</p>' +
-        '<button class="btn" onclick="triggerInstallPrompt()" style="margin-bottom:0.6rem;">Add to Home Screen</button>' +
-        '<button class="btn" style="background:transparent;color:var(--muted);" onclick="dismissInstallPrompt()">Not now</button>');
+      banner.classList.add('show');
     }
     // Otherwise (desktop browser with no install event, or already dismissed by the
     // browser) there's nothing reliable to prompt — stay silent rather than nag.
@@ -1085,8 +1118,10 @@ function showApp(){
     document.getElementById('student-nav').style.display='flex';
     document.getElementById('view-admin').classList.remove('active');
     updateHeaderChip();
-    setTimeout(maybeShowInstallPrompt, 1400);
-    setTimeout(maybeAskPushPermission, 5000);
+    // Push permission first, right after login; the home-screen banner follows once
+    // they've been using the app a few seconds, so the two never compete for attention.
+    setTimeout(maybeAskPushPermission, 1500);
+    setTimeout(maybeShowInstallPrompt, 10000);
     if (claimRef){
       // Bank-transfer payments can take a few minutes for Paystack's webhook to confirm,
       // so a single immediate claim attempt often lands before the pending_payments
