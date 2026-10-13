@@ -823,25 +823,26 @@ function openModal(title, bodyHtml){
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
 
 // ───────────────────────── Add to Home Screen prompt ─────────────────────────
-// Shown once per device, right after a student lands in the app, so they can get
-// the one-tap app icon without going looking for the browser's install option.
+// Shown on sign-in for up to 3 sign-ins (per device/browser), so a new student
+// gets a few chances to notice it rather than one easy-to-miss popup — then it
+// stops for good, whether they acted on it or not, so it never turns into a nag.
+const INSTALL_PROMPT_MAX_SHOWS = 3;
 let _deferredInstallPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   _deferredInstallPrompt = e;
 });
 window.addEventListener('appinstalled', () => {
-  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
+  // Actually installed — nothing left to ask, stop the counter for good.
+  try { localStorage.setItem('vacc_install_prompt_shows', String(INSTALL_PROMPT_MAX_SHOWS)); } catch(e){}
 });
 function _isStandaloneApp(){
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
 function dismissInstallPrompt(){
-  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
   document.getElementById('install-banner').classList.remove('show');
 }
 function triggerInstallPrompt(){
-  try { localStorage.setItem('vacc_install_prompt_seen', '1'); } catch(e){}
   document.getElementById('install-banner').classList.remove('show');
   if (_deferredInstallPrompt){
     _deferredInstallPrompt.prompt();
@@ -851,7 +852,8 @@ function triggerInstallPrompt(){
 function maybeShowInstallPrompt(){
   try {
     if (_isStandaloneApp()) return; // already installed/running as an app
-    if (localStorage.getItem('vacc_install_prompt_seen')) return; // already asked
+    const shows = parseInt(localStorage.getItem('vacc_install_prompt_shows') || '0', 10);
+    if (shows >= INSTALL_PROMPT_MAX_SHOWS) return; // used up its 3 chances
     const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
     const banner = document.getElementById('install-banner');
     const actions = document.getElementById('install-banner-actions');
@@ -859,11 +861,14 @@ function maybeShowInstallPrompt(){
       document.getElementById('install-banner-sub').innerHTML = 'Tap the <strong>Share</strong> icon in Safari, then choose <strong>“Add to Home Screen”</strong> for a better experience.';
       actions.innerHTML = '<button class="install-banner-btn solid" onclick="dismissInstallPrompt()">Got it</button>';
       banner.classList.add('show');
+      try { localStorage.setItem('vacc_install_prompt_shows', String(shows + 1)); } catch(e){}
     } else if (_deferredInstallPrompt){
       banner.classList.add('show');
+      try { localStorage.setItem('vacc_install_prompt_shows', String(shows + 1)); } catch(e){}
     }
-    // Otherwise (desktop browser with no install event, or already dismissed by the
-    // browser) there's nothing reliable to prompt — stay silent rather than nag.
+    // Otherwise (desktop browser with no install event, or the browser itself
+    // dismissed it) there's nothing reliable to show — stay silent, and this
+    // sign-in doesn't count against the 3, since nothing was actually shown.
   } catch(e){}
 }
 
@@ -884,7 +889,6 @@ function _urlBase64ToUint8Array(base64String){
 }
 
 async function enablePushNotifications(){
-  try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
   closeModal();
   try {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
@@ -905,21 +909,24 @@ async function enablePushNotifications(){
   } catch(e){ console.error('enablePushNotifications error:', e); }
 }
 function dismissPushPrompt(){
-  try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
   closeModal();
 }
+// Shown on sign-in for up to 3 sign-ins, same reasoning as the install prompt
+// above — a few chances to notice it, then it stops regardless of whether they
+// acted on it. A real answer at the browser level (granted/denied) always wins
+// over the counter, since there's nothing left to usefully ask at that point.
+const PUSH_PROMPT_MAX_SHOWS = 3;
 function maybeAskPushPermission(){
   try {
     if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
-    if (localStorage.getItem('vacc_push_prompt_seen')) return;
-    if (Notification.permission === 'granted' || Notification.permission === 'denied') {
-      try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
-      return;
-    }
+    if (Notification.permission === 'granted' || Notification.permission === 'denied') return;
+    const shows = parseInt(localStorage.getItem('vacc_push_prompt_shows') || '0', 10);
+    if (shows >= PUSH_PROMPT_MAX_SHOWS) return; // used up its 3 chances
     openModal('Let\'s Keep You Accountable', '' +
       '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Turn Notification On so you never miss an announcement or a nudge to keep going — even when the app isn\'t open.</p>' +
       '<button class="btn" onclick="enablePushNotifications()" style="margin-bottom:0.6rem;">Turn Notification On</button>' +
       '<button class="btn" style="background:transparent;color:var(--muted);" onclick="dismissPushPrompt()">Not now</button>');
+    try { localStorage.setItem('vacc_push_prompt_shows', String(shows + 1)); } catch(e){}
   } catch(e){}
 }
 
@@ -975,6 +982,44 @@ async function getAllCourses(){
   const snap = await col('courses').get();
   return snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
 }
+// Lightweight catalog read — title/price/icon/lessonCount only, none of the
+// actual lesson content (video links, text, assignments). Used for the course
+// LIST views (the catalog tab, the public landing page), which never need the
+// full lesson content, only ever needed when a student opens one specific
+// course (getCourse). This is what makes the list fast for a brand-new visitor
+// who has nothing cached yet — the old version pulled every course's entire
+// modules/lessons tree just to show a title and a price.
+async function getCourseCards(){
+  const snap = await col('course_cards').get();
+  return snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+}
+function courseCardFields(c){
+  return {
+    title: c.title, description: c.description, instructor: c.instructor,
+    icon: c.icon, is_paid: !!c.is_paid, price: c.price || 0,
+    lessonCount: courseLessonCount(c), moduleCount: (c.modules||[]).length
+  };
+}
+// Mirrors a course's summary fields into course_cards whenever the course or its
+// modules change, so the light catalog read above never goes stale. Best-effort:
+// a failure here never blocks the actual course edit the admin is making.
+async function syncCourseCard(courseId, c){
+  try { await col('course_cards').doc(courseId).set(courseCardFields(c), { merge: true }); }
+  catch (e) { console.error('syncCourseCard error:', e); }
+}
+async function runCourseCardMigration(){
+  showToast('Optimizing course list…');
+  try {
+    const idToken = await auth.currentUser.getIdToken();
+    const res = await fetch('/.netlify/functions/migrate-course-cards', {
+      method: 'POST', headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+idToken }
+    }).then(r=>r.json());
+    showToast(res && res.success ? 'Done — ' + res.migrated + ' course(s) optimized.' : ((res && res.error) || 'Something went wrong.'));
+  } catch (e) {
+    console.error('runCourseCardMigration error:', e);
+    showToast('Something went wrong.');
+  }
+}
 async function getMySubmission(uid, lessonId){
   const snap = await col('submissions').doc(uid+'_'+lessonId).get();
   return snap.exists ? snap.data() : null;
@@ -993,9 +1038,9 @@ function showRegister(){ hideAllScreens(); document.getElementById('reg-screen')
 
 async function renderLandingStats(){
   try {
-    const courses = await getAllCourses();
+    const courses = await getCourseCards();
     document.getElementById('land-stat-courses').textContent = courses.length;
-    document.getElementById('land-stat-lessons').textContent = courses.reduce((s,c)=>s+courseLessonCount(c),0);
+    document.getElementById('land-stat-lessons').textContent = courses.reduce((s,c)=>s+(c.lessonCount||0),0);
   } catch(e){ /* public read may not be ready yet; ignore */ }
 }
 
@@ -1245,13 +1290,13 @@ function setCourseFilter(f){
 async function renderCourses(){
   const el = document.getElementById('courses-list');
   el.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
-  const [courses, myEnrollments] = await Promise.all([getAllCourses(), getMyEnrollments(currentUser.uid)]);
+  const [courses, myEnrollments] = await Promise.all([getCourseCards(), getMyEnrollments(currentUser.uid)]);
   const enrolledIds = new Set(myEnrollments.map(e=>e.course_id));
   let list = courseFilter==='mine' ? courses.filter(c=>enrolledIds.has(c.id)) : courses;
   if (!list.length){ el.innerHTML = '<div class="empty-state"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg><h4>No courses yet</h4><p>'+(courseFilter==='mine'?'Enroll in a course to see it here.':'Check back soon.')+'</p></div>'; return; }
   el.innerHTML = list.map(c=>{
     const en = myEnrollments.find(e=>e.course_id===c.id);
-    const total = courseLessonCount(c);
+    const total = c.lessonCount||0;
     const pct = en && total ? Math.round(((en.completed||[]).length/total)*100) : 0;
     return '<div class="course-card" onclick="openCourse(\''+c.id+'\')">'+
       '<div class="course-thumb">'+c.icon+(en?'<div class="prog-badge">'+pct+'% done</div>':(c.is_paid?'<div class="prog-badge">'+money(c.price)+'</div>':'<div class="prog-badge">Free</div>'))+'</div>'+
@@ -1681,7 +1726,8 @@ async function renderAdminCourses(){
   const el = document.getElementById('acontent-courses');
   el.innerHTML = '<button class="btn btn-primary btn-full" style="margin-bottom:1rem" onclick="openAddCourseModal()">+ Add Course</button><div class="empty-state"><p>Loading...</p></div>';
   const courses = await getAllCourses();
-  let html = '<button class="btn btn-primary btn-full" style="margin-bottom:1rem" onclick="openAddCourseModal()">+ Add Course</button>';
+  let html = '<button class="btn btn-primary btn-full" style="margin-bottom:1rem" onclick="openAddCourseModal()">+ Add Course</button>'+
+    '<button class="btn btn-ghost btn-full" style="margin-bottom:1rem;font-size:0.78rem" onclick="runCourseCardMigration()" title="Rebuilds the fast course-list cache. Safe to click anytime, even repeatedly.">⚡ Optimize course list (run once after adding courses)</button>';
   if (!courses.length){ html += '<div class="empty-state"><p>No courses yet.</p></div>'; }
   html += courses.map(c=>{
     return '<div class="admin-course-item"><div class="admin-course-head">'+
@@ -1728,7 +1774,9 @@ async function saveNewCourse(){
   const price = isPaid ? parseFloat(document.getElementById('crs-price').value) || 0 : 0;
   if (!title || !desc || !instr){ showToast('Please fill in all fields.'); return; }
   if (isPaid && price<=0){ showToast('Please set a price greater than 0 for a paid course.'); return; }
-  await col('courses').add({ title, description:desc, instructor:instr, icon, is_paid:isPaid, price, created_at: FieldValue.serverTimestamp(), modules:[] });
+  const newCourse = { title, description:desc, instructor:instr, icon, is_paid:isPaid, price, created_at: FieldValue.serverTimestamp(), modules:[] };
+  const ref = await col('courses').add(newCourse);
+  await syncCourseCard(ref.id, newCourse);
   closeModal();
   showToast('Course created! 📚');
   renderAdminCourses();
@@ -1748,13 +1796,17 @@ async function saveEditCourse(id){
   const isPaid = window._coursePriceMode === 'paid';
   const price = isPaid ? parseFloat(document.getElementById('crs-price').value) || 0 : 0;
   if (isPaid && price<=0){ showToast('Please set a price greater than 0 for a paid course.'); return; }
-  await col('courses').doc(id).update({
+  const fields = {
     icon: document.getElementById('crs-icon').value.trim() || '📚',
     title: document.getElementById('crs-title').value.trim(),
     description: document.getElementById('crs-desc').value.trim(),
     instructor: document.getElementById('crs-instructor').value.trim(),
     is_paid: isPaid, price
-  });
+  };
+  await col('courses').doc(id).update(fields);
+  // Modules aren't touched by this form, so lessonCount/moduleCount stay as they
+  // are — merge:true means omitting them here leaves them alone.
+  await col('course_cards').doc(id).set(fields, { merge: true });
   closeModal();
   showToast('Course updated!');
   renderAdminCourses();
@@ -1769,6 +1821,7 @@ function copyCourseLink(id){
 async function deleteCourse(id){
   if (!confirm('Delete this course and all its modules and lessons?')) return;
   await col('courses').doc(id).delete();
+  await col('course_cards').doc(id).delete().catch(()=>{});
   showToast('Course deleted.');
   renderAdminCourses();
 }
@@ -1783,6 +1836,7 @@ async function saveNewModule(courseId){
   const modules = c.modules || [];
   modules.push({ id: uidShort(), title, lessons:[] });
   await col('courses').doc(courseId).update({ modules });
+  await syncCourseCard(courseId, Object.assign({}, c, { modules }));
   closeModal(); showToast('Module added!'); renderAdminCourses();
 }
 async function deleteModule(courseId, moduleId){
@@ -1790,6 +1844,7 @@ async function deleteModule(courseId, moduleId){
   const c = await getCourse(courseId);
   const modules = (c.modules||[]).filter(m=>m.id!==moduleId);
   await col('courses').doc(courseId).update({ modules });
+  await syncCourseCard(courseId, Object.assign({}, c, { modules }));
   showToast('Module deleted.'); renderAdminCourses();
 }
 function openAddLessonModal(courseId, moduleId){
@@ -1829,6 +1884,7 @@ async function saveNewLesson(courseId, moduleId){
   const m = modules.find(x=>x.id===moduleId);
   m.lessons.push({ id: uidShort(), title, type, youtube: type==='video'?ytId(youtube):'', content: document.getElementById('les-content').value.trim(), assignment: document.getElementById('les-assignment').value.trim() });
   await col('courses').doc(courseId).update({ modules });
+  await syncCourseCard(courseId, c);
   closeModal(); showToast('Lesson added!'); renderAdminCourses();
 }
 async function saveEditLesson(courseId, moduleId, lessonId){
@@ -1842,6 +1898,7 @@ async function saveEditLesson(courseId, moduleId, lessonId){
   const l = m.lessons.find(x=>x.id===lessonId);
   l.title = title; l.type = type; l.youtube = type==='video'?ytId(youtube):''; l.content = document.getElementById('les-content').value.trim(); l.assignment = document.getElementById('les-assignment').value.trim();
   await col('courses').doc(courseId).update({ modules });
+  await syncCourseCard(courseId, c);
   closeModal(); showToast('Lesson updated!'); renderAdminCourses();
 }
 async function deleteLesson(courseId, moduleId, lessonId){
@@ -1851,6 +1908,7 @@ async function deleteLesson(courseId, moduleId, lessonId){
   const m = modules.find(x=>x.id===moduleId);
   m.lessons = m.lessons.filter(l=>l.id!==lessonId);
   await col('courses').doc(courseId).update({ modules });
+  await syncCourseCard(courseId, c);
   showToast('Lesson deleted.'); renderAdminCourses();
 }
 
@@ -1908,18 +1966,26 @@ async function postAnnouncement(){
   const content = document.getElementById('ann-content').value.trim();
   if (!title || !content){ showToast('Please fill in both fields.'); return; }
   await col('announcements').add({ title, content, created_at: FieldValue.serverTimestamp() });
-  showToast('Announcement published! 📣');
   renderAdminAnnouncements();
-  // Best-effort push to every subscribed student — an announcement is still
-  // published even if sending notifications fails for some reason.
+  // The announcement is published either way — push is best-effort on top of it —
+  // but admin needs to actually SEE whether it went out, not just a console log
+  // nobody's looking at, so the toast reflects the real outcome.
   try {
     const idToken = await auth.currentUser.getIdToken();
-    await fetch('/.netlify/functions/send-push', {
+    const res = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
       body: JSON.stringify({ title: title, body: content, url: '/?nav=announcements' })
-    });
-  } catch (e) { console.error('send-push error:', e); }
+    }).then(r => r.json());
+    if (res && res.success){
+      showToast('Published! 📣 Notified ' + res.sent + ' device' + (res.sent===1?'':'s') + '.');
+    } else {
+      showToast('Published, but notifications failed: ' + ((res && res.error) || 'unknown error'));
+    }
+  } catch (e) {
+    console.error('send-push error:', e);
+    showToast('Published, but notifications failed to send.');
+  }
 }
 async function deleteAnnouncement(id){
   if (!confirm('Delete this announcement?')) return;
