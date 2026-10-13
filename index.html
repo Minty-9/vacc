@@ -749,7 +749,7 @@ const dbFS = firebase.firestore();
 const FieldValue = firebase.firestore.FieldValue;
 
 // TODO: swap to your live public key right before launch (pk_live_...). Never put the secret key here.
-const PAYSTACK_PUBLIC_KEY = 'pk_live_4b3f74ff6047228d59a17644321927fe63ce34fe';
+const PAYSTACK_PUBLIC_KEY = 'pk_test_34405783bfc7bd1d16ea616e024c4196cd563345';
 
 let currentUser = null;
 let courseFilter = 'all';
@@ -916,9 +916,9 @@ function maybeAskPushPermission(){
       try { localStorage.setItem('vacc_push_prompt_seen', '1'); } catch(e){}
       return;
     }
-    openModal('Get notified about updates', '' +
-      '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Turn on notifications so you don\'t miss new announcements from VACC Learn — even when the app isn\'t open.</p>' +
-      '<button class="btn" onclick="enablePushNotifications()" style="margin-bottom:0.6rem;">Enable Notifications</button>' +
+    openModal('Let\'s Keep You Accountable', '' +
+      '<p style="font-size:0.88rem;line-height:1.6;color:var(--muted);margin-bottom:1rem;">Turn Notification On so you never miss an announcement or a nudge to keep going — even when the app isn\'t open.</p>' +
+      '<button class="btn" onclick="enablePushNotifications()" style="margin-bottom:0.6rem;">Turn Notification On</button>' +
       '<button class="btn" style="background:transparent;color:var(--muted);" onclick="dismissPushPrompt()">Not now</button>');
   } catch(e){}
 }
@@ -1959,6 +1959,7 @@ async function renderAdminUsers(){
       '<div class="ul-info"><div class="ul-name">'+esc(u.full_name)+(u.role==='admin'?'<span class="pill admin">Admin</span>':'')+(u.status==='suspended'?'<span class="pill suspended">Suspended</span>':'')+'</div><div class="ul-email">'+esc(u.email)+'</div></div>'+
       '<div class="ul-actions">'+
       (canManage ? '<button class="icon-btn" onclick="toggleUserStatus(&quot;'+d.id+'&quot;)" title="Suspend/Reactivate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.9" y1="4.9" x2="19.1" y2="19.1"/></svg></button>' : '')+
+      (canManage ? '<button class="icon-btn danger" onclick="deleteStudent(&quot;'+d.id+'&quot;,&quot;'+esc(u.full_name)+'&quot;)" title="Delete account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg></button>' : '')+
       '</div></div>';
   }).join('');
 }
@@ -1968,6 +1969,28 @@ async function toggleUserStatus(id){
   await col('users').doc(id).update({ status: newStatus });
   showToast(newStatus==='suspended' ? 'User suspended.' : 'User reactivated.');
   renderAdminUsers();
+}
+async function deleteStudent(id, name){
+  // Permanent, unlike suspend — this also removes their Firebase Auth record,
+  // which is the part that actually frees their email up to sign up again.
+  if (!confirm('Permanently delete ' + name + '\'s account?\n\nThis removes their login, enrollments, submissions, and posts for good — they\'ll be able to sign up again with the same email, but as a brand new account. This can\'t be undone.')) return;
+  try {
+    const idToken = await auth.currentUser.getIdToken();
+    const res = await fetch('/.netlify/functions/delete-student', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
+      body: JSON.stringify({ uid: id })
+    }).then(r => r.json());
+    if (res && res.success){
+      showToast('Account deleted.');
+      renderAdminUsers();
+    } else {
+      showToast((res && res.error) ? res.error : 'Could not delete this account.');
+    }
+  } catch (e) {
+    console.error('deleteStudent error:', e);
+    showToast('Could not delete this account.');
+  }
 }
 
 // ───────────────────────── Boot ─────────────────────────
