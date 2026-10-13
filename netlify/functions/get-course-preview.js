@@ -10,17 +10,29 @@ exports.handler = async (event) => {
     return { statusCode: 400, body: JSON.stringify({ error: 'Missing courseId' }) };
   }
   try {
-    const snap = await admin.firestore().collection('courses').doc(courseId).get();
-    if (!snap.exists) {
-      return { statusCode: 404, body: JSON.stringify({ error: 'Course not found' }) };
+    const db = admin.firestore();
+    // The course_cards cache already has exactly these fields precomputed, so
+    // prefer it — it's the lightest possible read, which matters here most of
+    // all: this is cold ad traffic with nothing cached client-side yet. Fall
+    // back to the full course doc for any course that predates the cache.
+    const cardSnap = await db.collection('course_cards').doc(courseId).get();
+    let c, lessonCount;
+    if (cardSnap.exists) {
+      c = cardSnap.data();
+      lessonCount = c.lessonCount || 0;
+    } else {
+      const snap = await db.collection('courses').doc(courseId).get();
+      if (!snap.exists) {
+        return { statusCode: 404, body: JSON.stringify({ error: 'Course not found' }) };
+      }
+      c = snap.data();
+      lessonCount = (c.modules || []).reduce((s, m) => s + (m.lessons ? m.lessons.length : 0), 0);
     }
-    const c = snap.data();
-    const lessonCount = (c.modules || []).reduce((s, m) => s + (m.lessons ? m.lessons.length : 0), 0);
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        id: snap.id,
+        id: courseId,
         title: c.title,
         description: c.description,
         instructor: c.instructor,
