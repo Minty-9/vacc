@@ -948,6 +948,11 @@ function courseCompleted(en, course){
   const total = courseLessonCount(course);
   return !!en && total>0 && (en.completed||[]).length>=total;
 }
+// A certificate needs BOTH: every lesson done AND an admin's explicit approval
+// (which the admin can only give once all of that student's assignments for the
+// course have been reviewed). Students can't write certificate_approved — see
+// firestore.rules — so finishing the lessons alone never unlocks it.
+function certApproved(en){ return !!en && en.certificate_approved === true; }
 function certId(uid, courseId, seed){
   let h = 0;
   const s = 'VACC-'+uid+'-'+courseId+'-'+seed;
@@ -991,6 +996,12 @@ async function getAllCourses(){
 // modules/lessons tree just to show a title and a price.
 async function getCourseCards(){
   const snap = await col('course_cards').get();
+  if (snap.empty){
+    // Safety net: cards not built yet (migration never run) — fall back to the
+    // full courses so the catalog is never blank, just slower.
+    const all = await getAllCourses();
+    return all.map(c=>Object.assign({}, c, { lessonCount: courseLessonCount(c), moduleCount:(c.modules||[]).length }));
+  }
   return snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
 }
 function courseCardFields(c){
@@ -1331,7 +1342,11 @@ async function openCourse(id){
     html += '<div class="summary-row"><span class="label">Your Progress</span><span class="val">'+pct+'% ('+(en.completed||[]).length+'/'+total+')</span></div>';
     html += '<div class="progress-bar-track" style="margin:0.8rem 0 1.2rem"><div class="progress-bar-fill" style="width:'+pct+'%"></div></div>';
     if (courseCompleted(en, c)){
-      html += '<div class="alert alert-info" style="align-items:center;margin-bottom:1.2rem"><span>🎓</span><div style="flex:1">Course complete! Your certificate is ready.</div><button class="btn btn-primary btn-sm" onclick="openCertificate(\''+id+'\')">View</button></div>';
+      if (certApproved(en)){
+        html += '<div class="alert alert-info" style="align-items:center;margin-bottom:1.2rem"><span>🎓</span><div style="flex:1">Congratulations! Your certificate has been approved.</div><button class="btn btn-primary btn-sm" onclick="openCertificate(\''+id+'\')">View</button></div>';
+      } else {
+        html += '<div class="alert alert-info" style="align-items:center;margin-bottom:1.2rem"><span>⏳</span><div style="flex:1">All lessons done! Your certificate will be available once your assignments have been reviewed and approved by your coach.</div></div>';
+      }
     }
   } else if (c.is_paid){
     html += '<button class="btn btn-primary btn-full" style="margin:1rem 0 1.2rem" onclick="payForCourse(\''+id+'\','+c.price+')">Pay '+money(c.price)+' to Enroll</button>';
@@ -1592,8 +1607,9 @@ async function renderProfile(){
   const courses = await Promise.all(myEnrollments.map(e=>getCourse(e.course_id)));
   const earned = myEnrollments.map((e,i)=>({en:e, course:courses[i]})).filter(p=>p.course && courseCompleted(p.en, p.course));
   const certEl = document.getElementById('profile-certs');
-  certEl.innerHTML = earned.length ? earned.map(p=>
-    '<div class="summary-row"><span class="label">🎓 '+esc(p.course.title)+'</span><button class="btn btn-outline btn-sm" onclick="openCertificate(&quot;'+p.course.id+'&quot;)">View</button></div>'
+  certEl.innerHTML = earned.length ? earned.map(p=> certApproved(p.en)
+    ? '<div class="summary-row"><span class="label">🎓 '+esc(p.course.title)+'</span><button class="btn btn-outline btn-sm" onclick="openCertificate(&quot;'+p.course.id+'&quot;)">View</button></div>'
+    : '<div class="summary-row"><span class="label">⏳ '+esc(p.course.title)+'</span><span class="pill pending">Awaiting approval</span></div>'
   ).join('') : '<div class="empty-state"><p style="font-size:0.78rem">Complete a course to earn your first certificate.</p></div>';
 }
 async function handleAvatarUpload(evt){
@@ -1628,6 +1644,7 @@ async function openCertificate(courseId){
   const c = await getCourse(courseId);
   const en = await getEnrollment(currentUser.uid, courseId);
   if (!c || !courseCompleted(en, c)){ showToast('Complete every lesson to unlock this certificate.'); return; }
+  if (!certApproved(en)){ showToast('Your certificate is awaiting your coach\'s approval.'); return; }
   ctx.certCourseId = courseId;
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-certificate').classList.add('active');
@@ -1916,8 +1933,9 @@ async function renderAdminAssignments(){
   const el = document.getElementById('acontent-assignments');
   el.innerHTML = '<div class="empty-state"><p>Loading...</p></div>';
   const snap = await col('submissions').orderBy('submitted_at','desc').limit(50).get();
-  if (snap.empty){ el.innerHTML = '<div class="empty-state"><p>No submissions yet.</p></div>'; return; }
-  el.innerHTML = '<div class="card"><div id="admin-sub-list"></div></div>';
+  el.innerHTML = '<div id="admin-cert-section"></div>'+(snap.empty ? '<div class="empty-state"><p>No submissions yet.</p></div>' : '<div class="card"><div class="card-header"><h3>Submissions</h3></div><div id="admin-sub-list"></div></div>');
+  renderAdminCertificates();
+  if (snap.empty) return;
   const rows = await Promise.all(snap.docs.map(async d=>{
     const s = d.data();
     const uSnap = await col('users').doc(s.user_id).get();
@@ -1926,6 +1944,51 @@ async function renderAdminAssignments(){
     return '<div class="submission-item" style="cursor:pointer" onclick="openSubmissionReview(&quot;'+d.id+'&quot;)"><div class="sub-top"><span class="sub-user">'+esc(uSnap.exists?uSnap.data().full_name:'Unknown')+'</span><span class="pill '+(s.status==='reviewed'?'reviewed':'pending')+'">'+(s.status==='reviewed'?'Reviewed':'Pending')+'</span></div><div class="sub-lesson">'+esc(lf?lf.lesson.title:'Lesson')+' · '+esc(c?c.title:'')+'</div><div class="sub-preview">'+(s.type==='file'?'📎 '+esc(s.file_name):esc(s.content).slice(0,90))+'</div></div>';
   }));
   document.getElementById('admin-sub-list').innerHTML = rows.join('');
+}
+// ── Certificate approvals ──
+// Lists every student who has finished all lessons of a course. The admin can
+// approve only once every assignment in that course has been reviewed.
+async function renderAdminCertificates(){
+  const el = document.getElementById('admin-cert-section');
+  if (!el) return;
+  try {
+    const [enSnap, subSnap] = await Promise.all([ col('enrollments').get(), col('submissions').get() ]);
+    const reviewed = new Set(), submitted = new Set();
+    subSnap.docs.forEach(d=>{ const s=d.data(); submitted.add(s.user_id+'_'+s.lesson_id); if (s.status==='reviewed') reviewed.add(s.user_id+'_'+s.lesson_id); });
+    const rows = [];
+    for (const d of enSnap.docs){
+      const en = d.data();
+      const c = await getCourse(en.course_id);
+      if (!c || !courseCompleted(en, c)) continue;
+      const uSnap = await col('users').doc(en.user_id).get();
+      if (!uSnap.exists) continue;
+      const need = [];
+      (c.modules||[]).forEach(m=>m.lessons.forEach(l=>{ if (l.assignment) need.push(l.id); }));
+      const done = need.filter(lid=>reviewed.has(en.user_id+'_'+lid)).length;
+      const ready = done === need.length;
+      const approved = certApproved(en);
+      const status = approved ? '<span class="pill approved">Approved</span>' : (ready ? '<span class="pill pending">Ready to approve</span>' : '<span class="pill notsub">'+done+'/'+need.length+' assignments reviewed</span>');
+      const btn = approved
+        ? '<button class="btn btn-outline btn-sm" onclick="setCertificateApproval(&quot;'+d.id+'&quot;,false)">Revoke</button>'
+        : '<button class="btn btn-success btn-sm" '+(ready?'':'disabled style="opacity:.45;cursor:not-allowed"')+' onclick="setCertificateApproval(&quot;'+d.id+'&quot;,true)">Approve</button>';
+      rows.push('<div class="submission-item"><div class="sub-top"><span class="sub-user">'+esc(uSnap.data().full_name)+'</span>'+status+'</div><div class="sub-lesson">🎓 '+esc(c.title)+'</div><div style="margin-top:0.6rem">'+btn+'</div></div>');
+    }
+    el.innerHTML = '<div class="card"><div class="card-header"><h3>Certificate Approvals</h3></div>'+(rows.length ? rows.join('') : '<div class="empty-state"><p style="font-size:0.78rem">No student has finished a course yet.</p></div>')+'</div>';
+  } catch(e){
+    console.error('renderAdminCertificates error:', e);
+    el.innerHTML = '';
+  }
+}
+async function setCertificateApproval(enrollmentId, approve){
+  if (!confirm(approve ? 'Approve this certificate? The student will be able to view and download it.' : 'Revoke this certificate? The student will no longer be able to view it.')) return;
+  try {
+    const patch = approve
+      ? { certificate_approved: true, certificate_approved_at: FieldValue.serverTimestamp() }
+      : { certificate_approved: false, certificate_approved_at: FieldValue.delete() };
+    await col('enrollments').doc(enrollmentId).update(patch);
+    showToast(approve ? 'Certificate approved! 🎓' : 'Certificate revoked.');
+    renderAdminCertificates();
+  } catch(e){ console.error(e); showToast('Could not update: '+(e && e.message ? e.message : 'unknown error')); }
 }
 async function openSubmissionReview(id){
   const snap = await col('submissions').doc(id).get();
